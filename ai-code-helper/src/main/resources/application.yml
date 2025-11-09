@@ -3,9 +3,21 @@ spring:
     name: ai-code-helper
   profiles:
     active: local
+server:
+  port: 8081
+  servlet:
+    context-path: /api
 langchain4j:
   community:
     dashscope:
       chat-model:
         model-name: qwen-max
-        api-key: ${DASHSCOPE_API_KEY}
+        api-key: ${ALIYUN_API_KEY}
+      embedding-model:
+        model-name: text-embedding-v4
+        api-key: ${ALIYUN_API_KEY}
+      streaming-chat-model:
+        model-name: qwen-max
+        api-key: ${ALIYUN_API_KEY}
+bigmodel:
+  api-key: ${ZHIPU_API_KEY}
