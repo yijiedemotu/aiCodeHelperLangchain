@@ -1,7 +1,5 @@
 package com.yupi.aicodehelper.ai.mcp;
 
-import io.modelcontextprotocol.client.McpClient;
-import io.modelcontextprotocol.spec.McpTransport;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +9,8 @@ public class McpConfig {
 
     @Value("${bigmodel.api-key}")
     private String apiKey;
+
+    //mcp是一个模型上下文协议，用于在模型之间传递上下文信息
 
     //这里我有一个问题：
     //我引入了mcp的注解，但是找不到McpToolProvider
