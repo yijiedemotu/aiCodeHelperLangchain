@@ -98,6 +98,9 @@ Vite 已将 `/api` 代理到 `http://localhost:8081`。
 | `POST /api/ai/report` | JSON | 结构化输出，模型直接返回 Java 对象（`ReportAssistant.Report`） |
 | `POST /api/ai/study-plan` | JSON | 多 Agent 工作流（3 次模型调用串行，**实测约 45 秒**） |
 
+> 完整路径 = `http://localhost:8081` + `/api`（`server.servlet.context-path`）+ 上表路径。
+> **少了 `/api` 会直接 404**，这是本项目最容易踩的一步。
+
 请求体均为 JSON，例如：
 
 ```bash
@@ -108,8 +111,15 @@ curl -X POST http://localhost:8081/api/ai/chat \
 
 ### 在线接口文档（Swagger UI）
 
-启动后端后访问 **http://localhost:8081/api/swagger-ui.html**，
-可直接在页面上试调全部接口。原始 OpenAPI JSON 在 `/api/v3/api-docs`。
+启动后端后访问 **http://localhost:8081/api/swagger-ui.html**
+（会 302 跳到 `/api/swagger-ui/index.html`，两者都能用），可直接在页面上试调全部接口。
+原始 OpenAPI JSON 在 **http://localhost:8081/api/v3/api-docs**。
+
+> ⚠ 配置陷阱（已修复，写在这里避免复发）：`springdoc.swagger-ui.url` 是
+> **浏览器直接请求的绝对路径**，不参与 `context-path` 拼接。若把它写成
+> `/api/v3/api-docs`，springdoc 还会再补一层 context-path，页面实际去请求
+> `/api/api/v3/api-docs` → 404。典型症状是「Swagger 页面能打开，但接口列表加载不出来」。
+> 现已置为 `""`，由 springdoc 自行推导出唯一正确的 `/api/v3/api-docs`。
 
 ### 统一错误响应
 

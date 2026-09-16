@@ -48,10 +48,17 @@ springdoc:
     # 生成的 OpenAPI JSON 路径，默认即为 /v3/api-docs，这里显式写出便于查找
     path: /v3/api-docs
   swagger-ui:
-    # 显式指定文档来源。默认值是 Swagger 官方的 petstore 演示地址，
-    # 在离线或内网环境下会导致页面一直转圈加载不出来；
-    # 指向本项目的文档路径后，页面打开即可用
-    url: /api/v3/api-docs
+    # 文档来源交给 springdoc 自己推导，不要手写 /api/v3/api-docs。
+    #
+    # 这里踩过一个坑：swagger-ui.swagger-config.url 是「浏览器直接取的绝对路径」，
+    # 不参与 context-path 拼接。写死 /api/v3/api-docs 后 springdoc 又会自动补一层
+    # context-path，最终页面去请求 /api/api/v3/api-docs → 404，表现为
+    # 「Swagger 页面能打开，但接口列表一直加载不出来/报错」。
+    # 置空则推导出 /api/v3/api-docs（唯一正确的地址），实测可用。
+    #
+    # 另：springdoc 默认值指向 Swagger 官方 petstore 演示地址，离线/内网环境会一直转圈，
+    # 因此必须把 url 显式覆盖掉——「置空」正好同时解决这两个问题。
+    url: ""
     # 关闭「默认 petstore 地址」这个内置提示，避免页面上出现无用的演示入口
     disable-swagger-default-url: true
     # 接口按 HTTP 方法（GET/POST）分组展示，而不是按字母序混排。
