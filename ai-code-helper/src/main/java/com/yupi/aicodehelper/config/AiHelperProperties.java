@@ -65,6 +65,13 @@ public class AiHelperProperties {
     private Mcp mcp = new Mcp();
 
     /**
+     * 可观测性相关配置 —— 对应 LangChain4j 1.20.0 引入的
+     * {@code AiServiceListener} 官方事件总线。装配代码见
+     * {@code com.yupi.aicodehelper.ai.observability.AiObservabilityConfig}。
+     */
+    private Observability observability = new Observability();
+
+    /**
      * 会话记忆配置。
      *
      * <p>这里有一个 AI 应用开发的关键取舍：<b>记忆窗口开多大？</b>
@@ -94,6 +101,38 @@ public class AiHelperProperties {
 
         /** 记忆落盘目录（相对路径基于服务的工作目录），仅 persistEnabled=true 时生效 */
         private String storeDir = "chat-data/memory";
+
+        /**
+         * 记忆窗口的裁剪策略：{@code message}（按条数）或 {@code token}（按 token 数）。
+         *
+         * <h4>为什么要提供两种策略？</h4>
+         * 两者约束的东西不同，各有适用的场合：
+         * <pre>
+         *   message —— 最多留 N 条消息
+         *     优点：行为直观、零计算开销
+         *     缺点：约束不了长度。10 条短寒暄约 800 token，
+         *           10 条含代码的长回答可能 15000 token，直接顶爆上下文窗口
+         *
+         *   token   —— 最多留 N 个 token
+         *     优点：与模型的真实限制对齐（上下文窗口就是按 token 算的）
+         *     缺点：每条消息都要估算 token，有计算开销（本项目用启发式估算，很轻）
+         * </pre>
+         *
+         * <p>默认 {@code message}，保持与升级前一致的行为，避免「一升级行为就变」；
+         * 生产环境建议改成 {@code token}，理由见
+         * {@link com.yupi.aicodehelper.ai.memory.HeuristicTokenCountEstimator} 的类注释。
+         */
+        private String strategy = "message";
+
+        /**
+         * {@code strategy=token} 时保留的最大 token 数。
+         *
+         * <p>取值要留出余量：这个窗口只约束<b>历史消息</b>，
+         * 实际发给模型的还有系统提示词、本轮提问、RAG 检索结果和工具清单。
+         * qwen-max 的上下文窗口很大，取 4000 是「够用且不浪费」的保守值——
+         * 真正该警惕的不是窗口不够，而是历史被塞进太多不再相关的内容。
+         */
+        private int maxTokens = 4000;
     }
 
     /**
@@ -214,5 +253,50 @@ public class AiHelperProperties {
 
         /** 是否打印 MCP 通信报文，排查连接问题时打开 */
         private boolean logRequests = false;
+    }
+
+    /**
+     * 可观测性配置（LangChain4j 1.20.0 的 {@code AiServiceListener} 事件总线）。
+     *
+     * <h3>它解决什么问题？</h3>
+     * AI 应用最常被问到的三个问题，在 1.20.0 之前都缺少规范的落点：
+     * <ol>
+     *   <li><b>这次问答花了多少钱？</b>——token 用量只能从 {@code ChatResponse} 里手动抠；</li>
+     *   <li><b>哪一次调用失败了、是哪个会话？</b>——异常日志里没有 memoryId 与调用方法名；</li>
+     *   <li><b>模型到底有没有真的调用工具？</b>——只能靠读回答内容去猜。</li>
+     * </ol>
+     * 官方事件总线把这些都变成了「订阅事件」这一件事，见
+     * {@code com.yupi.aicodehelper.ai.observability.AiObservabilityConfig}。
+     *
+     * <p>本组配置项只控制<b>记录什么</b>，不控制是否注册监听器——
+     * 监听器本身是纯日志、无副作用，注册了也不会影响业务行为。
+     */
+    @Data
+    public static class Observability {
+
+        /**
+         * 是否记录每次模型调用的 token 消耗与耗时。
+         *
+         * <p>对应事件 {@code AiServiceResponseReceivedEvent}。
+         * 这是成本监控的基础数据——没有它，账单只能靠事后惊讶。
+         */
+        private boolean logTokenUsage = true;
+
+        /**
+         * 是否记录工具调用明细（工具名、参数、耗时、结果长度）。
+         *
+         * <p>对应事件 {@code ToolExecutedEvent}。
+         * 排查「模型怎么答得不对」时，第一件事就是确认工具是否被调用、
+         * 拿到的结果是不是空的。
+         */
+        private boolean logToolExecution = true;
+
+        /**
+         * 是否记录输出护栏的执行结果。
+         *
+         * <p>对应事件 {@code OutputGuardrailExecutedEvent}。
+         * 护栏命中属于「业务正常拒绝」，需要与系统故障区分开统计。
+         */
+        private boolean logGuardrail = true;
     }
 }

@@ -1,9 +1,9 @@
 package com.yupi.aicodehelper.ai.guardrail;
 
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.guardrail.GuardrailResult;
 import dev.langchain4j.guardrail.OutputGuardrail;
 import dev.langchain4j.guardrail.OutputGuardrailResult;
-import dev.langchain4j.guardrail.OutputGuardrailResult.Failure;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
@@ -105,15 +105,23 @@ public class SensitiveWordOutputGuardrail implements OutputGuardrail {
     /**
      * 辅助方法：演示如何读取护栏的失败详情。
      *
-     * <p>{@code OutputGuardrailResult} 内部可以携带多个 {@link Failure}
+     * <p>{@code OutputGuardrailResult} 内部可以携带多个 Failure
      * （一个请求可能同时触发多条规则）。业务上如果要把违规详情记录下来
      * 做风控统计，就遍历这个列表。这里仅作演示，未在 validate 中调用。
+     *
+     * <h4>一个泛型上的坑（本方法踩过）</h4>
+     * {@code failures()} 的签名是 {@code <F extends GuardrailResult.Failure> List<F> failures()}——
+     * 返回类型是<b>由调用方推断的类型参数</b>。如果这里写成
+     * {@code for (OutputGuardrailResult.Failure f : ...)}，编译器会尝试把
+     * {@code GuardrailResult.Failure} 强转成子类型 {@code OutputGuardrailResult.Failure}，
+     * 从而报「不兼容的类型」。
+     * 正确做法是<b>用基类型接收</b>，让类型推断自然落到 {@code GuardrailResult.Failure}。
      */
     public void logFailures(OutputGuardrailResult result) {
         if (result == null || result.failures() == null || result.failures().isEmpty()) {
             return;
         }
-        for (Failure failure : result.failures()) {
+        for (GuardrailResult.Failure failure : result.failures()) {
             log.warn("护栏失败明细: message={}, cause={}",
                     failure.message(), failure.cause() == null ? "无" : failure.cause().getMessage());
         }

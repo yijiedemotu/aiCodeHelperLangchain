@@ -25,6 +25,17 @@ import dev.langchain4j.service.UserMessage;
  *   要内容管控  → 用本接口（同步返回，输入输出双向护栏）
  * </pre>
  * 这不是妥协，而是安全与体验之间的正常取舍——任何流式 AI 产品都面临同样的问题。
+ *
+ * <h3>⚑ 本接口是「无状态」的（刻意如此）</h3>
+ * 注意 {@link #chat(String)} 没有 {@code @MemoryId} 参数，
+ * 且工厂在构建本接口时<b>不挂载任何 ChatMemory</b>。这一点很重要，原因是实测发现：
+ * 原先它与 {@code chatForReport} 都没有 {@code @MemoryId}，
+ * 却都挂在带记忆的 AiService 上，于是所有用户、所有接口的请求
+ * 都被塞进同一个名为 {@code "default"} 的记忆桶里——
+ * 用户 A 的提问会作为「历史对话」出现在用户 B 的请求中，构成真实的隐私泄露。
+ * <p>修法就是本接口所体现的：<b>一次性的问答不需要记忆，那就不配记忆</b>。
+ * 既然没有记忆桶，也就不存在串号的可能。详细分析见
+ * {@link ReportAssistant} 的类注释。
  */
 public interface GuardedAssistant {
 

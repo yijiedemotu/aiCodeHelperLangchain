@@ -80,6 +80,33 @@
                  并不是这个 starter 提供的。 -->
         </dependency>
 
+        <!--
+          参数校验（Bean Validation）。
+          提供 jakarta.validation 注解（@NotBlank / @Size / @Min ...）与 Hibernate Validator 实现。
+          Spring Boot 3 起校验已从 web starter 中剥离，需要显式引入这个 starter
+          ——不引它的话 @Valid 注解会被静默忽略，接口照常接收空消息，
+          直到模型调用失败才暴露问题（这是很容易踩的一个坑）。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+          OpenAPI 3 文档 + Swagger UI（springdoc）。
+          注意选型：springdoc-openapi 是当前 Spring Boot 3 生态的主流方案，
+          已取代早年的 springfox（后者对 Spring Boot 3 支持不佳）。
+          引入后无需任何配置即可访问：
+              /api/swagger-ui.html   —— 可交互的接口调试页面
+              /api/v3/api-docs       —— 原始 OpenAPI JSON
+          前缀 /api 来自下面 application.yml 里的 server.servlet.context-path。
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.8.10</version>
+        </dependency>
+
         <!-- ==================== LangChain4j 核心 ==================== -->
         <dependency>
             <groupId>dev.langchain4j</groupId>

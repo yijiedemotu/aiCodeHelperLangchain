@@ -1,23 +1,201 @@
+# ============================================================================
+#  应用主配置
+#  ---------------------------------------------------------------------------
+#  说明：本文件只放「不敏感、可提交到代码仓库」的配置。
+#        真实密钥放在 application-local.yml 中（该文件已被 .gitignore 忽略），
+#        通过下面的 profiles.active=local 自动加载。
+# ============================================================================
 spring:
   application:
     name: ai-code-helper
   profiles:
     active: local
+  # ---------------------------------------------------------------------------
+  #  MVC 行为调整
+  #  ---------------------------------------------------------------------------
+  mvc:
+    # 找不到处理器时抛 NoHandlerFoundException，而不是静默返回 404。
+    # 这样全局异常处理器（GlobalExceptionHandler）才能接管 404，
+    # 让「路径写错」也返回统一的 JSON 结构——否则前端会遇到
+    # 「有时是 JSON 错误体、有时是 HTML 白板页」的解析不一致。
+    throw-exception-if-no-handler-found: true
+    #
+    # ⚠ 注意这里【没有】设置 spring.web.resources.add-mappings=false。
+    # 网上流传的「必须一并关掉静态资源映射」的写法，在本项目里是错的：
+    # Swagger UI 的页面与脚本正是通过静态资源映射从 webjars 里读出来的，
+    # 关掉它会让 /swagger-ui.html 直接 404。
+    # 而在 Spring Boot 3 中，默认的静态资源处理器遇到不存在的文件时
+    # 抛的是 NoResourceFoundException（HttpStatusCodeException 的子类），
+    # 本身就会走全局异常处理器。也就是说：不关它也能达成目的，还不会误伤 Swagger。
+    # 「配置能不能抄，取决于它对不对得上自己的依赖」，这是一例。
+
 server:
   port: 8081
   servlet:
+    # 全局接口前缀。配了它之后，AiController 上的 @RequestMapping("/ai")
+    # 实际对外路径是 /api/ai
     context-path: /api
+
+# ============================================================================
+#  OpenAPI / Swagger UI（springdoc）
+#  ---------------------------------------------------------------------------
+#  访问地址（注意都带 context-path 的 /api 前缀）：
+#     http://localhost:8081/api/swagger-ui.html   可交互的调试页面
+#     http://localhost:8081/api/v3/api-docs       原始 OpenAPI JSON
+# ============================================================================
+springdoc:
+  api-docs:
+    # 生成的 OpenAPI JSON 路径，默认即为 /v3/api-docs，这里显式写出便于查找
+    path: /v3/api-docs
+  swagger-ui:
+    # 显式指定文档来源。默认值是 Swagger 官方的 petstore 演示地址，
+    # 在离线或内网环境下会导致页面一直转圈加载不出来；
+    # 指向本项目的文档路径后，页面打开即可用
+    url: /api/v3/api-docs
+    # 关闭「默认 petstore 地址」这个内置提示，避免页面上出现无用的演示入口
+    disable-swagger-default-url: true
+    # 接口按 HTTP 方法（GET/POST）分组展示，而不是按字母序混排。
+    # 对本项目格外有用：GET 版是调试用、POST 版是推荐用法，分组后一目了然
+    operations-sorter: method
+    # 让接口默认处于折叠状态，页面更清爽；需要时点开即可
+    doc-expansion: none
+    # 按 tag 分组时保持声明顺序（AI 能力接口）
+    tags-sorter: alpha
+
+# ============================================================================
+#  LangChain4j 模型配置（由 DashScope Starter 自动读取）
+#  ---------------------------------------------------------------------------
+#  这里没有对应的 Java 配置类 —— 这是「自动配置」的典型形态：
+#  Starter 内部有一个 XxxProperties 类绑定了这些前缀，
+#  读到配置后就自动创建并注册 ChatModel / StreamingChatModel / EmbeddingModel 三个 Bean。
+#  业务代码只管 @Resource 注入，完全不关心模型是怎么 new 出来的。
+# ============================================================================
 langchain4j:
   community:
     dashscope:
+      # 同步对话模型
       chat-model:
         model-name: qwen-max
         api-key: ${ALIYUN_API_KEY}
+      # 向量化模型（RAG 用）
       embedding-model:
         model-name: text-embedding-v4
         api-key: ${ALIYUN_API_KEY}
+      # 流式对话模型（SSE 用）
       streaming-chat-model:
         model-name: qwen-max
         api-key: ${ALIYUN_API_KEY}
-bigmodel:
-  api-key: ${ZHIPU_API_KEY}
+
+# ============================================================================
+#  本项目的业务配置（对应 AiHelperProperties 类）
+#  ---------------------------------------------------------------------------
+#  这里集中了原先散落在各个 Java 类里的硬编码参数：
+#    · 文档目录、检索条数、相似度阈值  → 原先写在 RagConfig 里
+#    · 记忆窗口大小                    → 原先写在 AiCodeHelperServiceFactory 里
+#  抽出来后，调参不用改代码、不用重新编译。
+#
+#  绑定规则：ai-helper.memory.max-messages → 字段 maxMessages
+#  （Spring Boot 的「宽松绑定」：短横线、驼峰、大写下划线都能识别）
+# ============================================================================
+ai-helper:
+
+  # ---------- 会话记忆 ----------
+  memory:
+    # 记忆窗口保留的最大消息条数
+    # 注意单位是「条」：1 轮问答 = 1 条 UserMessage + 1 条 AiMessage
+    # 所以 10 条实际只记住最近 5 轮对话
+    max-messages: 10
+    # 是否把记忆持久化到磁盘
+    # false：存内存，重启即失忆（原项目的行为）
+    # true ：落盘到本地文件，重启后仍能恢复（本项目新增）
+    persist-enabled: true
+    # 记忆落盘目录（相对路径基于进程的工作目录）
+    store-dir: chat-data/memory
+    # ------------------------------------------------------------------------
+    # 记忆窗口的裁剪策略：message（按条数）/ token（按 token 数）
+    # ------------------------------------------------------------------------
+    # message —— 最多留 max-messages 条消息。
+    #   直观、零计算开销，但【约束不了长度】：10 条短寒暄约 800 token，
+    #   10 条含代码的长回答可能 15000 token。而模型的上下文窗口是按 token 算的，
+    #   用条数去约束 token，等于没有约束。
+    # token   —— 最多留 max-tokens 个 token（LangChain4j 的 TokenWindowChatMemory）。
+    #   与模型的真实限制对齐，是本项目推荐的取值。
+    #   代价是每条消息都要估算 token，这里用的是本地启发式估算（无网络、无密钥开销）。
+    strategy: token
+    # strategy=token 时保留的最大 token 数。
+    # 注意这个窗口只约束【历史消息】；实际发给模型的还有系统提示词、本轮提问、
+    # RAG 检索结果和工具清单，所以不要贴着模型上限去设，留出余量
+    max-tokens: 4000
+
+  # ---------- RAG 检索增强 ----------
+  rag:
+    # 知识库文档位置
+    # classpath: 前缀表示从类路径读取 —— 这是修复「打 jar 包后启动失败」的关键
+    # 若想改成由运维单独维护的外部目录，写成普通路径即可（如 D:/knowledge/docs）
+    docs-path: classpath:docs
+    # 单个文档片段的字符数上限。太大检索不精准；太小会把一句话切断
+    chunk-size: 1000
+    # 相邻片段的重叠字符数，避免语义在切分处丢失
+    chunk-overlap: 200
+    # 每次检索返回的最大片段数。条数越多上下文越全，token 消耗也越多
+    max-results: 5
+    # 相似度阈值（0~1），低于此分数的片段被丢弃
+    # 调高 → 宁缺毋滥，可能检索不到；调低 → 容易把不相关内容喂给模型诱发幻觉
+    min-score: 0.75
+    # 向量库快照路径。非空时启用持久化：启动时若快照存在则直接复用，
+    # 不再重复调用 embedding 接口（embedding 是按 token 收费的）
+    vector-store-path: chat-data/vector-store.json
+    # 是否启用查询压缩：多轮追问（如「那要多久？」）会先让模型结合历史补全成
+    # 完整问题再检索。效果更好，但每次检索多一次模型调用
+    compress-query: false
+
+  # ---------- 护栏（内容安全） ----------
+  guardrail:
+    # 单条用户输入的最大字符数，超长直接拒绝（防超长输入烧 token）
+    max-input-length: 2000
+    # 输出屏蔽词：命中后把词替换成 **，而不是拒绝回答
+    # 生产环境建议把这些词放在 application-local.yml，避免提交到代码仓库
+    banned-words: []
+    # 是否启用提示词注入检测（基于 LangChain4j 内置的正则护栏）
+    prompt-injection-check: true
+    # 是否启用输出屏蔽词替换
+    sensitive-word-filter: true
+
+  # ---------- MCP 外部工具接入 ----------
+  mcp:
+    # 默认关闭：连接外部 MCP Server 需要可用的网络与凭据，
+    # 默认开启会让没有外网的开发者启动就失败
+    enabled: false
+    # MCP Server 的 Streamable HTTP 地址。以智谱开放平台的联网搜索为例：
+    # url: https://open.bigmodel.cn/api/mcp/web_search/sse?Authorization=${ZHIPU_API_KEY}
+    # 注意：需要同时把上面的 enabled 改为 true 才会生效
+    url: ""
+    # 是否打印 MCP 请求/响应报文，排查连接问题时打开
+    log-requests: false
+
+  # ---------- 可观测性（LangChain4j 1.20.0 的 AiServiceListener 事件总线） ----------
+  #  装配代码见 ai/observability/AiObservabilityConfig。
+  #  这里只控制【记录什么】，不控制是否注册监听器：监听器本身是纯日志、
+  #  且内部吞掉了自身异常，注册了不会改变任何业务行为。
+  #
+  #  这三项打开后，日志里会出现：
+  #    [LLM用量] 调用=a1b2c3d4 方法=chatWithMeta 会话=123 | 输入=1523 输出=306 ... 耗时=4180ms
+  #    [工具调用] 工具=interviewQuestionSearch 参数=redis 结果长度=812 ...
+  #    [护栏] 输出护栏命中！会话=123 护栏=SensitiveWordOutputGuardrail
+  #  用 invocationId（日志里的「调用=」字段）可以把同一次业务调用的多条记录串起来——
+  #  注意一次带工具调用的问答会触发多轮模型请求，没有这个 ID 就对不上号。
+  observability:
+    # 记录每次模型调用的 token 用量、结束原因与端到端耗时（成本监控的基础）
+    log-token-usage: true
+    # 记录工具调用明细（工具名、参数、结果长度与预览）
+    log-tool-execution: true
+    # 记录输出护栏的执行结果（命中用 warn，通过用 debug）
+    log-guardrail: true
+
+# 日志级别调整：把本项目的包设为 debug，便于观察 RAG 检索与工具调用的细节
+logging:
+  level:
+    root: info
+    com.yupi.aicodehelper: debug
+    # LangChain4j 内部日志（MCP 通信报文也走这里）
+    dev.langchain4j: info

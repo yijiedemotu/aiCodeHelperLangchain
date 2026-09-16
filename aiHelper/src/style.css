@@ -1,65 +1,90 @@
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+/**
+ * 全局样式文件：只做「中性重置」，不接管主题。
+ *
+ * <h3>为什么要把原来的暗色主题从这里删掉？</h3>
+ * Vite 模板生成的原始样式里有三行「坑」：
+ * <ol>
+ *   <li><code>color-scheme: light dark</code> + 深色 <code>:root</code> 背景——
+ *       它会把 <code>&lt;html&gt;</code> 刷成 #242424，但本项目的聊天 UI 是浅色卡片式设计，
+ *       于是深色模式用户会看到「白底白字」；</li>
+ *   <li><code>#app { width: 100vw; height: 100vh }</code>——
+ *       在移动端 <code>100vh</code> 会被地址栏挡住一截，输入框被顶出屏幕；</li>
+ *   <li><code>button { background-color: #1a1a1a }</code>——
+ *       全局按钮黑底，和聊天界面的主色按钮冲突，改起来要到处写 !important。</li>
+ * </ol>
+ *
+ * <h3>现在的职责划分（单一职责，避免两处抢着定义颜色）</h3>
+ * <ul>
+ *   <li><b>style.css（本文件）</b>：只做盒模型、字号继承、滚动条等与主题无关的重置；</li>
+ *   <li><b>App.vue</b>：唯一定义主题的地方，用 <code>--ah-*</code> CSS 变量同时给出
+ *       浅色与深色两套取值，并显式声明 <code>color-scheme</code>。</li>
+ * </ul>
+ * 这样「颜色从哪来」只有一个答案，后续换主题不必全局搜索。
+ */
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-* {
-  margin: 0;
-  padding: 0;
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-body {
+html,
+body,
+#app {
+  /* 用 100% 而不是 100vh：html/body 的百分比高度不受移动端地址栏伸缩影响 */
+  height: 100%;
   margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
+  padding: 0;
 }
 
-#app {
-  width: 100vw;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
+body {
+  min-width: 320px;
+  /* 字体族放在这里统一继承，各组件不再重复声明 */
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  /* 让浏览器原生控件（滚动条、表单）跟随 App.vue 声明的 color-scheme，
+     避免出现「浅色界面配深色滚动条」的割裂感 */
+  color-scheme: light dark;
+  /* 禁止移动端点击时出现灰色高亮块，聊天界面里很影响观感 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 表单控件默认不继承字体，这里补上，否则输入框会退回浏览器默认衬线字体 */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
 }
 
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* 键盘可访问性：只在键盘导航时显示焦点圈，鼠标点击不显示 */
+:focus-visible {
+  outline: 2px solid #4c6ef5;
+  outline-offset: 2px;
+}
+
+/* 细滚动条，浅色/深色各自取色，避免默认滚动条过于抢眼 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.45);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.7);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }

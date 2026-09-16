@@ -34,5 +34,12 @@ dist-ssr/
 Thumbs.db
 desktop.ini
 
+# ---- 运行时数据（会话记忆 + 向量库快照） ----
+# 这两样都是「跑起来就会生成、且只对本机有意义」的东西：
+#   chat-data/memory/*.json      存的是真实对话内容，属于用户隐私
+#   chat-data/vector-store.json  向量库快照，体积 2MB+，且含 embedding（按量计费）
+# 因此不入库；删掉后重启会按 docs/ 重新生成（重建会重新消耗 embedding 额度）
+chat-data/
+
 # ---- 本地工具/临时产物 ----
 .workbuddy/

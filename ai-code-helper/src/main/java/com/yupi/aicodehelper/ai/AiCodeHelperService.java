@@ -1,7 +1,9 @@
 package com.yupi.aicodehelper.ai;
 
 import dev.langchain4j.service.MemoryId;
+import dev.langchain4j.service.Result;
 import dev.langchain4j.service.SystemMessage;
+import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.UserMessage;
 import reactor.core.publisher.Flux;
 
@@ -29,25 +31,44 @@ import java.util.List;
  *       <td>流式返回，模型每生成一小段就推送一次（需要配 StreamingChatModel）</td></tr>
  *   <tr><td>{@code Result<T>}</td>
  *       <td>带元信息的包装，能拿到 token 消耗、用到的检索内容、执行的工具等</td></tr>
+ *   <tr><td>{@code TokenStream}</td>
+ *       <td>流式，但推送的是<b>结构化事件</b>而非纯文本：
+ *           逐字输出、检索到的片段、工具调用过程、完整响应各走各的回调</td></tr>
  * </table>
  *
- * <h3>关于 @MemoryId</h3>
+ * <h3>关于 @MemoryId —— 本项目最容易踩的坑</h3>
  * 只有标注了 {@code @MemoryId} 的参数才会参与「多会话隔离」。
  * 框架拿这个值当作 key，去 {@code ChatMemoryProvider} 里取对应会话的记忆。
  * <ul>
- *   <li>标了：每个 memoryId 一份独立记忆，互不干扰；</li>
- *   <li>没标：共用同一份记忆（多用户场景下会串号！）。</li>
+ *   <li><b>标了</b>：每个 memoryId 一份独立记忆，互不干扰；</li>
+ *   <li><b>没标</b>：一律落到名为 {@code "default"} 的那一份记忆上——
+ *       而这个 default 桶是<b>进程级的、所有用户共用的</b>。</li>
  * </ul>
- * 原代码的 {@code chat(String)} 没有 {@code @MemoryId}，但同时配置了
- * {@code chatMemory}，所以它用的是那份共享记忆——单机测试没问题，
- * 多人使用就会互相污染上下文。这是原项目一个隐藏的设计缺陷。
+ * 换句话说：<b>在一个挂了记忆的 AiService 里，任何没有 {@code @MemoryId} 的方法
+ * 都是一个「公共聊天室」</b>。原项目就踩了这个坑——
+ * {@code chat(String)} 与 {@code chatForReport(String)} 都没有 {@code @MemoryId}，
+ * 导致不同用户、不同接口的请求被塞进同一段对话。
+ * <p>本项目已按「有状态 / 无状态」把服务切开：
+ * <ul>
+ *   <li>{@link AiCodeHelperService#chatStream} —— 带 {@code @MemoryId}，
+ *       每个会话独立记忆（唯一真正需要记忆的方法）；</li>
+ *   <li>{@link GuardedAssistant#chat}、{@link ReportAssistant#chatForReport}
+ *       —— 无状态接口，压根不配记忆，从根上杜绝串号。</li>
+ * </ul>
+ * 剩下的 {@link #chat(String)} 共享 default 桶，但它<b>仅供测试与本地调试</b>，
+ * 没有对外暴露的 HTTP 入口；如需上生产，请参照 {@link ReportAssistant} 的方式
+ * 拆到独立接口，或补上 {@code @MemoryId} 参数。
  */
 public interface AiCodeHelperService {
 
     /**
-     * 简单同步问答（无会话记忆隔离）。
+     * 简单同步问答。
      *
-     * <p>适合一次性的独立提问，比如测试类中的调用、或不需要上下文的场景。
+     * <p><b>⚠ 注意它没有 {@code @MemoryId}：</b>调用它会读写那份共用的
+     * {@code "default"} 记忆。因此这个方法<b>仅限测试与本地调试</b>——
+     * 单元测试里靠它验证「多轮上下文确实生效」（见
+     * {@code AiCodeHelperServiceTest#chatWithMemory}），
+     * 但绝不能把它暴露成面向多用户的 HTTP 接口，否则就是公共聊天室。
      *
      * <p>方法只有一个 String 参数且标注了 {@code @UserMessage}，
      * 框架会把它作为用户消息发送。这里显式写上注解是为了让意图清晰——
@@ -59,45 +80,23 @@ public interface AiCodeHelperService {
     @SystemMessage(fromResource = "system-prompt.txt")
     String chat(@UserMessage String userMessage);
 
-    /**
-     * 结构化输出：让模型直接返回一个 Java 对象。
+    /*
+     * ------------------------------------------------------------------------
+     *  这里原本还有一个 chatForReport 方法（结构化输出）和嵌套的 Report record，
+     *  实测发现它们造成了「跨用户记忆串号」，已迁移到独立接口 ReportAssistant。
      *
-     * <h4>这比返回 String 再自己解析好在哪里？</h4>
-     * 传统做法是「让模型输出 JSON → 自己用 Jackson 解析」，但模型经常不听话：
-     * 会在 JSON 外面包上 ```json 代码块、会加解释性文字、字段名大小写不一致。
-     * 结构化输出由框架统一处理：把返回类型转成 JSON Schema 一并发给模型
-     * （现代模型服务商原生支持结构化输出约束），再按 Schema 反序列化，
-     * 可靠性远高于自己写正则去抠。
+     *  原因简述：记忆是挂在 AiService 级别的，一个接口一挂就是全接口生效。
+     *  而 chatForReport 没有 @MemoryId 参数，于是它和同样没有 @MemoryId 的
+     *  GuardedAssistant.chat 一起，共用了一个名为 "default" 的记忆桶——
+     *  所有用户、所有接口的请求都被塞进同一段对话，构成真实的隐私泄露。
      *
-     * <h4>为什么用 record 而不是普通类？</h4>
-     * Java 16+ 的 record 只声明字段就能用，天然不可变、自带
-     * equals/hashCode/toString/getter，非常适合做「数据载体」（DTO）。
-     * 用 Lombok 的 {@code @Data} 也可以，但 record 更简洁且语义更准确——
-     * 模型返回的结果本就不该被修改。
+     *  完整分析见 ReportAssistant 的类注释；记忆分层的原理见
+     *  AiCodeHelperServiceFactory#chatMemoryProvider。
      *
-     * <h4>字段类型选择的影响</h4>
-     * {@code List<String> suggestionList} 告诉框架这里是一个字符串数组，
-     * 会体现在生成的 JSON Schema 里，引导模型输出数组而不是一段拼接的文本。
-     * <b>返回类型写得越精确，模型输出越规整</b>，这是结构化输出的实用技巧。
-     *
-     * @param userMessage 用户的学习需求描述
-     * @return 包含称呼与建议列表的结构化对象
+     *  留下的 ChatMemoryProvider 只服务下面的 chatStream：它带 @MemoryId，
+     *  每个会话一份独立记忆，这才是符合预期的用法。
+     * ------------------------------------------------------------------------
      */
-    @SystemMessage(fromResource = "system-prompt.txt")
-    Report chatForReport(@UserMessage String userMessage);
-
-    /**
-     * 学习建议的结构化载体。
-     *
-     * <p>定义在接口内部（嵌套 record）是有意为之：它和这个接口强相关，
-     * 只有这里用得到，放在一起便于阅读，也不会污染包结构。
-     * 外部通过 {@code AiCodeHelperService.Report} 引用。
-     *
-     * @param name           对用户的称呼
-     * @param suggestionList 学习建议条目列表
-     */
-    record Report(String name, List<String> suggestionList) {
-    }
 
     /**
      * 流式对话（SSE 逐字返回），支持多会话记忆。
@@ -129,4 +128,102 @@ public interface AiCodeHelperService {
      */
     @SystemMessage(fromResource = "system-prompt.txt")
     Flux<String> chatStream(@MemoryId int memoryId, @UserMessage String userMessage);
+
+    /**
+     * 带元信息的同步问答（返回 {@link Result}）。
+     *
+     * <h3>它和 {@link #chatStream} 的关系：同一件事，两种「颗粒度」</h3>
+     * 两者都是「带会话记忆的问答」，区别只在于<b>返回什么</b>：
+     * <pre>
+     *   chatStream   返回 Flux&lt;String&gt;  —— 只有回答文本，追求「快出字」
+     *   chatWithMeta 返回 Result&lt;String&gt; —— 回答 + 一整套元信息，追求「可观测」
+     * </pre>
+     * 流式接口的元信息是被<b>丢弃</b>的：框架一边推字一边把 token 用量、
+     * 检索命中、工具调用记在内部的响应对象里，而 {@code Flux<String>} 这个返回类型
+     * 只允许我们把纯文本交出去。想看这些信息，就必须换一个能承载它们的返回类型。
+     *
+     * <h3>Result&lt;T&gt; 里到底有什么？</h3>
+     * <table border="1">
+     *   <caption>Result 的各个字段及其用途</caption>
+     *   <tr><th>方法</th><th>内容</th><th>实际用途</th></tr>
+     *   <tr><td>{@code content()}</td><td>回答本体（这里的 T 是 String）</td>
+     *       <td>正常返回给用户</td></tr>
+     *   <tr><td>{@code tokenUsage()}</td><td>输入 / 输出 / 总 token 数</td>
+     *       <td><b>成本核算</b>——按 token 计费，这是唯一的账单来源</td></tr>
+     *   <tr><td>{@code sources()}</td><td>本次实际命中的 RAG 片段（Content 列表）</td>
+     *       <td><b>RAG 效果评估</b>——能看见「到底检索到了什么」，
+     *           并据此给用户做引用溯源（显示「依据：xxx.md」）</td></tr>
+     *   <tr><td>{@code finishReason()}</td><td>STOP / LENGTH 等结束原因</td>
+     *       <td>识别「回答被长度截断」这类静默故障</td></tr>
+     *   <tr><td>{@code toolExecutions()}</td><td>执行过的工具及其结果</td>
+     *       <td>验证模型是否真的调用了工具，而不是凭记忆编造</td></tr>
+     * </table>
+     * <p>这四项信息在升级前是<b>完全拿不到</b>的——原项目里 {@code AiCodeHelper}
+     * 有一个「【可扩展点】可以从 chatResponse.tokenUsage() 读 token 数」的注释，
+     * {@code Result<T>} 就是那个扩展点的<b>声明式写法</b>：不改一行流程代码，
+     * 只把返回类型从 {@code String} 换成 {@code Result<String>}。
+     *
+     * <h3>为什么它也是有状态的？</h3>
+     * 带 {@code @MemoryId}，与 {@code chatStream} 共用同一套会话记忆——
+     * 用户在流式接口里聊的内容，切到元信息接口追问时上下文是连续的。
+     * 这正是它必须定义在 {@link AiCodeHelperService}（有状态服务）里、
+     * 而不能放进无状态的 {@link ReportAssistant} 的原因。
+     *
+     * <p><b>代价说明</b>：它是<b>同步</b>的，用户必须等模型生成完才能拿到结果，
+     * 首字延迟体验不如流式。所以它是「给运维和调试用的口子」，
+     * 而不是替代流式接口的日常通道。
+     *
+     * @param memoryId    会话标识，用于隔离不同会话的记忆
+     * @param userMessage 用户问题
+     * @return 回答内容 + token 用量 + 检索来源 + 工具调用记录
+     */
+    @SystemMessage(fromResource = "system-prompt.txt")
+    Result<String> chatWithMeta(@MemoryId int memoryId, @UserMessage String userMessage);
+
+    /**
+     * 结构化流式对话（返回 {@link TokenStream}）。
+     *
+     * <h3>它和 {@link #chatStream}（Flux）差在哪？</h3>
+     * 两者都是流式，但<b>信息密度完全不同</b>：
+     * <pre>
+     *   Flux&lt;String&gt;   —— 一条只装文本的管道。
+     *                     「正在检索知识库」「正在查面试鸭」这些过程
+     *                     在框架内部发生，到不了调用方。
+     *
+     *   TokenStream   —— 一条「带类型的多路事件」管道，可以分别订阅：
+     *                     onPartialResponse   逐字文本
+     *                     onPartialThinking   思考过程（推理模型才有）
+     *                     onRetrieved         本次检索到的片段  ⭐
+     *                     onToolExecuted      工具执行结果      ⭐
+     *                     onCompleteResponse  完整响应（含 token 用量）
+     *                     onError             异常
+     * </pre>
+     * 对一个面向用户的 AI 产品，这个差别直接决定体验：用 {@code Flux} 时，
+     * 用户提问后只能看着光标闪烁；用 {@code TokenStream} 时，
+     * 界面可以显示「正在检索知识库…」「正在查询面试题…」，
+     * 让等待变得可解释——<b>用户能忍受慢，但不能忍受不知道在干什么</b>。
+     *
+     * <h3>使用方式与传统回调 API 的区别</h3>
+     * 它是<b>链式注册回调 + 显式启动</b>的：
+     * <pre>{@code
+     *   tokenStream
+     *       .onPartialResponse(text -> ...)   // 注册，此时还没开始
+     *       .onCompleteResponse(resp -> ...)
+     *       .onError(err -> ...)
+     *       .start();                          // ⭐ 这一行才真正发起调用
+     * }</pre>
+     * <b>{@code start()} 不能漏</b>，也不能在注册回调之前调用——
+     * 漏掉它表现为「接口毫无反应、不报错」，是使用 TokenStream 最常见的坑。
+     *
+     * <p>另一个诚实的提醒：与 Flux 相比，{@code TokenStream} 目前
+     * <b>没有暴露取消/中止的入口</b>。若需要「用户点停止就断开」的能力，
+     * 用 {@code chatStream}（Flux 可由 Reactor 感知下游取消）更合适。
+     * 两者并存不是冗余，而是各自覆盖不同的取舍。
+     *
+     * @param memoryId    会话标识，用于隔离不同会话的记忆
+     * @param userMessage 用户问题
+     * @return 尚未启动的流式管道，注册完回调后必须调用 {@code start()}
+     */
+    @SystemMessage(fromResource = "system-prompt.txt")
+    TokenStream chatStreamEvents(@MemoryId int memoryId, @UserMessage String userMessage);
 }
